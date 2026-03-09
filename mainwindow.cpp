@@ -24,15 +24,21 @@
 #include <QFile>
 #include <QTextStream>
 #include <QPixmap>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QMediaDevices>
+#include <QCameraDevice>
+#include <QVideoWidget>
 #include <QCamera>
-#include <QImageCapture>
 #include <QMediaCaptureSession>
-#include <QTimer>
+#include <QImageCapture>
+#include <QComboBox>
+#include <QStandardPaths>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    setWindowTitle("Invoice Scanner — Aether Solutions");
+    setWindowTitle("InvoiceData — Aether Solutions");
     setMinimumSize(1200, 750);
     applyStyleSheet();
     buildMenuBar();
@@ -41,7 +47,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Init OCR
     if (!m_ocr.initialize()) {
-        statusBar()->showMessage("⚠ Tesseract not found — check tessdata path");
+        statusBar()->showMessage("⚠ Tesseract not ready: " + m_ocr.lastError());
     } else {
         statusBar()->showMessage("✔ OCR Engine ready");
     }
@@ -54,10 +60,14 @@ MainWindow::MainWindow(QWidget *parent)
     }
 }
 
-MainWindow::~MainWindow() {}
+MainWindow::~MainWindow() {
+    if (m_camera) {
+        m_camera->stop();
+        delete m_camera;
+    }
+}
 
-// ── UI Construction ──────────────────────────────────────────────────────────
-
+// ── UI ───────────────────────────────────────────────────────────────────────
 void MainWindow::buildUI() {
     QWidget *central = new QWidget(this);
     setCentralWidget(central);
@@ -76,14 +86,14 @@ void MainWindow::buildUI() {
     searchRow->addWidget(m_searchBox);
     searchRow->addWidget(searchBtn);
     searchRow->addWidget(clearBtn);
-    connect(searchBtn,  &QPushButton::clicked, this, &MainWindow::onSearch);
-    connect(clearBtn,   &QPushButton::clicked, this, &MainWindow::onClearSearch);
-    connect(m_searchBox,&QLineEdit::returnPressed, this, &MainWindow::onSearch);
+    connect(searchBtn,   &QPushButton::clicked,      this, &MainWindow::onSearch);
+    connect(clearBtn,    &QPushButton::clicked,      this, &MainWindow::onClearSearch);
+    connect(m_searchBox, &QLineEdit::returnPressed,  this, &MainWindow::onSearch);
 
-    // Main splitter
+    // Splitter
     QSplitter *splitter = new QSplitter(Qt::Horizontal);
 
-    // Left: table + actions
+    // ── Left Panel ───────────────────────────────────────────────────
     QWidget *leftPanel = new QWidget;
     QVBoxLayout *lv = new QVBoxLayout(leftPanel);
     lv->setContentsMargins(0,0,0,0);
@@ -95,8 +105,8 @@ void MainWindow::buildUI() {
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->setAlternatingRowColors(true);
     m_table->setSortingEnabled(true);
-    m_table->setColumnWidth(0, 60);
-    connect(m_table, &QTableWidget::cellDoubleClicked, this, &MainWindow::onTableDoubleClick);
+    connect(m_table, &QTableWidget::cellDoubleClicked,
+            this, &MainWindow::onTableDoubleClick);
 
     QHBoxLayout *actRow = new QHBoxLayout;
     m_viewBtn   = new QPushButton("👁  View");
@@ -117,7 +127,7 @@ void MainWindow::buildUI() {
     lv->addWidget(m_table);
     lv->addLayout(actRow);
 
-    // Right: preview + log
+    // ── Right Panel ──────────────────────────────────────────────────
     QWidget *rightPanel = new QWidget;
     QVBoxLayout *rv = new QVBoxLayout(rightPanel);
     rv->setContentsMargins(0,0,0,0);
@@ -130,12 +140,23 @@ void MainWindow::buildUI() {
     m_previewLabel->setStyleSheet("background:#1e1e2e; border-radius:6px; color:#888;");
     pvl->addWidget(m_previewLabel);
 
+    // Scan buttons inside right panel
+    QHBoxLayout *scanRow = new QHBoxLayout;
+    QPushButton *scanFileBtn   = new QPushButton("📂  Scan from File");
+    QPushButton *scanCameraBtn = new QPushButton("📷  Scan from Camera");
+    scanFileBtn->setFixedHeight(34);
+    scanCameraBtn->setFixedHeight(34);
+    scanRow->addWidget(scanFileBtn);
+    scanRow->addWidget(scanCameraBtn);
+    connect(scanFileBtn,   &QPushButton::clicked, this, &MainWindow::onScanImage);
+    connect(scanCameraBtn, &QPushButton::clicked, this, &MainWindow::onScanCamera);
+
     QGroupBox *logGrp = new QGroupBox("Activity Log");
     QVBoxLayout *lgl = new QVBoxLayout(logGrp);
     m_logView = new QTextEdit;
     m_logView->setReadOnly(true);
     m_logView->setFont(QFont("Courier New", 9));
-    m_logView->setMaximumHeight(180);
+    m_logView->setMaximumHeight(200);
     lgl->addWidget(m_logView);
 
     m_progress = new QProgressBar;
@@ -143,6 +164,7 @@ void MainWindow::buildUI() {
     m_progress->setRange(0,0);
 
     rv->addWidget(prevGrp);
+    rv->addLayout(scanRow);
     rv->addWidget(logGrp);
     rv->addWidget(m_progress);
     rv->addStretch();
@@ -156,173 +178,311 @@ void MainWindow::buildUI() {
     mainLayout->addWidget(splitter);
 }
 
+// ── Menu Bar ─────────────────────────────────────────────────────────────────
 void MainWindow::buildMenuBar() {
     QMenuBar *mb = menuBar();
 
-    // ── File Menu ─────────────────────────────────────────────────
     QMenu *fileMenu = mb->addMenu("&File");
 
-    QAction *scanImgAct = new QAction("Scan Image", this);
+    QAction *scanImgAct = new QAction("📂  Scan Image", this);
     scanImgAct->setShortcut(QKeySequence("Ctrl+O"));
     connect(scanImgAct, &QAction::triggered, this, &MainWindow::onScanImage);
     fileMenu->addAction(scanImgAct);
 
-    QAction *scanCamAct = new QAction("Scan Camera", this);
+    QAction *scanCamAct = new QAction("📷  Scan Camera", this);
     scanCamAct->setShortcut(QKeySequence("Ctrl+K"));
     connect(scanCamAct, &QAction::triggered, this, &MainWindow::onScanCamera);
     fileMenu->addAction(scanCamAct);
 
     fileMenu->addSeparator();
 
-    QAction *exportAct = new QAction("Export CSV", this);
+    QAction *exportAct = new QAction("📤  Export CSV", this);
     exportAct->setShortcut(QKeySequence("Ctrl+E"));
     connect(exportAct, &QAction::triggered, this, &MainWindow::onExportCSV);
     fileMenu->addAction(exportAct);
 
     fileMenu->addSeparator();
 
-    QAction *exitAct = new QAction("Exit", this);
+    QAction *exitAct = new QAction("❌  Exit", this);
     exitAct->setShortcut(QKeySequence("Ctrl+Q"));
     connect(exitAct, &QAction::triggered, qApp, &QApplication::quit);
     fileMenu->addAction(exitAct);
 
-    // ── Invoice Menu ──────────────────────────────────────────────
     QMenu *invoiceMenu = mb->addMenu("&Invoice");
 
-    QAction *viewAct = new QAction("View", this);
+    QAction *viewAct = new QAction("👁  View", this);
     connect(viewAct, &QAction::triggered, this, &MainWindow::onViewInvoice);
     invoiceMenu->addAction(viewAct);
 
-    QAction *editAct = new QAction("Edit", this);
+    QAction *editAct = new QAction("✏  Edit", this);
     connect(editAct, &QAction::triggered, this, &MainWindow::onEditInvoice);
     invoiceMenu->addAction(editAct);
 
-    QAction *delAct = new QAction("Delete", this);
+    QAction *delAct = new QAction("🗑  Delete", this);
     connect(delAct, &QAction::triggered, this, &MainWindow::onDeleteInvoice);
     invoiceMenu->addAction(delAct);
 
-    QAction *refreshAct = new QAction("Refresh", this);
+    QAction *refreshAct = new QAction("🔄  Refresh", this);
     connect(refreshAct, &QAction::triggered, this, &MainWindow::refreshTable);
     invoiceMenu->addAction(refreshAct);
 
-    // ── Help Menu ─────────────────────────────────────────────────
     QMenu *helpMenu = mb->addMenu("&Help");
-
     QAction *aboutAct = new QAction("About", this);
     connect(aboutAct, &QAction::triggered, this, [this]() {
         QMessageBox::about(this, "About",
-                           "<b>Invoice Scanner</b><br>v1.0<br><br>"
+                           "<b>InvoiceData</b><br>v1.0<br><br>"
                            "OCR-powered invoice digitizer<br>"
-                           "Built with Qt + Tesseract + SQLite");
+                           "Built with Qt6 + Tesseract + SQLite");
     });
     helpMenu->addAction(aboutAct);
 }
 
+// ── Tool Bar ─────────────────────────────────────────────────────────────────
 void MainWindow::buildToolBar() {
     QToolBar *tb = addToolBar("Main");
     tb->setMovable(false);
 
-    QAction *a1 = new QAction("Scan Image", this);
+    QAction *a1 = new QAction("📂 Scan Image", this);
     connect(a1, &QAction::triggered, this, &MainWindow::onScanImage);
     tb->addAction(a1);
 
-    QAction *a2 = new QAction("Scan Camera", this);
+    QAction *a2 = new QAction("📷 Scan Camera", this);
     connect(a2, &QAction::triggered, this, &MainWindow::onScanCamera);
     tb->addAction(a2);
 
     tb->addSeparator();
 
-    QAction *a3 = new QAction("Refresh", this);
+    QAction *a3 = new QAction("🔄 Refresh", this);
     connect(a3, &QAction::triggered, this, &MainWindow::refreshTable);
     tb->addAction(a3);
 
-    QAction *a4 = new QAction("Export CSV", this);
+    QAction *a4 = new QAction("📤 Export CSV", this);
     connect(a4, &QAction::triggered, this, &MainWindow::onExportCSV);
     tb->addAction(a4);
 }
-void MainWindow::applyStyleSheet() {
-    setStyleSheet(R"(
-        QMainWindow { background: #13131f; }
-        QWidget     { background: #1a1a2e; color: #e0e0e0; font-family: Segoe UI; font-size: 13px; }
-        QGroupBox   { border: 1px solid #3a3a5c; border-radius: 6px; margin-top: 8px; padding: 8px;
-                      font-weight: bold; color: #a0c4ff; }
-        QGroupBox::title { subcontrol-origin: margin; left: 10px; }
-        QTableWidget { background: #12122a; gridline-color: #2a2a4a;
-                       selection-background-color: #4a4aaa; border: none; border-radius:4px; }
-        QHeaderView::section { background: #252550; color: #a0c4ff;
-                               padding: 6px; border: none; font-weight:bold; }
-        QTableWidget::item:alternate { background: #16163a; }
-        QLineEdit   { background: #252545; border: 1px solid #4a4a7a; border-radius:4px;
-                      padding:4px 8px; color:#e0e0e0; }
-        QLineEdit:focus { border-color: #7a7aff; }
-        QPushButton { background: #3a3a8a; color: #ffffff; border: none;
-                      border-radius: 5px; padding: 6px 14px; font-weight:bold; }
-        QPushButton:hover  { background: #5a5acc; }
-        QPushButton:pressed{ background: #2a2a6a; }
-        QTextEdit   { background: #12122a; border: 1px solid #3a3a5c;
-                      border-radius: 4px; color: #c8c8d8; }
-        QTabWidget::pane { border: 1px solid #3a3a5c; border-radius:4px; }
-        QTabBar::tab { background:#252545; color:#a0a0c0; padding:7px 16px;
-                       border-radius:4px 4px 0 0; margin-right:2px; }
-        QTabBar::tab:selected { background:#3a3a8a; color:#ffffff; }
-        QProgressBar { border:none; border-radius:4px; background:#252545; height:8px; }
-        QProgressBar::chunk { background:#7a7aff; border-radius:4px; }
-        QMenuBar { background:#111128; color:#e0e0e0; }
-        QMenuBar::item:selected { background:#3a3a8a; }
-        QMenu { background:#1a1a3a; color:#e0e0e0; border:1px solid #3a3a5c; }
-        QMenu::item:selected { background:#3a3a8a; }
-        QToolBar { background:#111128; border:none; spacing:4px; padding:2px; }
-        QScrollBar:vertical { background:#1a1a2e; width:10px; }
-        QScrollBar::handle:vertical { background:#3a3a6a; border-radius:5px; }
-        QDoubleSpinBox { background:#252545; border:1px solid #4a4a7a; border-radius:4px;
-                         padding:4px; color:#e0e0e0; }
-        QDateEdit { background:#252545; border:1px solid #4a4a7a; border-radius:4px;
-                    padding:4px; color:#e0e0e0; }
-        QStatusBar { background:#111128; color:#888; }
-    )");
+
+// ── Camera Integration ───────────────────────────────────────────────────────
+void MainWindow::onScanCamera() {
+
+    // Get available cameras
+    const QList<QCameraDevice> cameras = QMediaDevices::videoInputs();
+    if (cameras.isEmpty()) {
+        QMessageBox::warning(this, "Camera",
+                             "No camera found on this device.\n"
+                             "Please connect a camera and try again.");
+        return;
+    }
+
+    // ── Build camera selection dialog ────────────────────────────────
+    m_cameraDialog = new QDialog(this);
+    m_cameraDialog->setWindowTitle("📷 Camera Scanner");
+    m_cameraDialog->setMinimumSize(700, 550);
+    m_cameraDialog->setStyleSheet(styleSheet());
+
+    QVBoxLayout *dlgLayout = new QVBoxLayout(m_cameraDialog);
+
+    // Camera selector
+    QHBoxLayout *camSelectRow = new QHBoxLayout;
+    QLabel *camLabel = new QLabel("Select Camera:");
+    QComboBox *camCombo = new QComboBox;
+    camCombo->setFixedHeight(30);
+    for (const QCameraDevice &dev : cameras)
+        camCombo->addItem(dev.description());
+    camSelectRow->addWidget(camLabel);
+    camSelectRow->addWidget(camCombo);
+    camSelectRow->addStretch();
+
+    // Video preview widget
+    m_videoWidget = new QVideoWidget;
+    m_videoWidget->setMinimumHeight(380);
+    m_videoWidget->setStyleSheet("background:#000;");
+
+    // Status label
+    QLabel *statusLbl = new QLabel("📹 Camera ready — position invoice and click Capture");
+    statusLbl->setAlignment(Qt::AlignCenter);
+    statusLbl->setStyleSheet("color:#a0c4ff; font-size:12px; padding:4px;");
+
+    // Buttons
+    QHBoxLayout *btnRow = new QHBoxLayout;
+    QPushButton *captureBtn = new QPushButton("📸  Capture Invoice");
+    QPushButton *cancelBtn  = new QPushButton("Cancel");
+    captureBtn->setFixedHeight(38);
+    cancelBtn->setFixedHeight(38);
+    captureBtn->setStyleSheet(
+        "QPushButton { background:#2ecc71; color:#000; font-weight:bold; "
+        "border-radius:5px; padding:6px 20px; }"
+        "QPushButton:hover { background:#27ae60; }"
+        );
+    btnRow->addStretch();
+    btnRow->addWidget(captureBtn);
+    btnRow->addWidget(cancelBtn);
+
+    dlgLayout->addLayout(camSelectRow);
+    dlgLayout->addWidget(m_videoWidget);
+    dlgLayout->addWidget(statusLbl);
+    dlgLayout->addLayout(btnRow);
+
+    // ── Setup camera ─────────────────────────────────────────────────
+    auto setupCamera = [&](int index) {
+        if (m_camera) {
+            m_camera->stop();
+            delete m_camera;
+            m_camera = nullptr;
+        }
+        if (m_captureSession) {
+            delete m_captureSession;
+            m_captureSession = nullptr;
+        }
+        if (m_imageCapture) {
+            delete m_imageCapture;
+            m_imageCapture = nullptr;
+        }
+
+        m_camera         = new QCamera(cameras[index], this);
+        m_captureSession = new QMediaCaptureSession(this);
+        m_imageCapture   = new QImageCapture(this);
+
+        m_captureSession->setCamera(m_camera);
+        m_captureSession->setVideoOutput(m_videoWidget);
+        m_captureSession->setImageCapture(m_imageCapture);
+
+        // Connect capture signals
+        connect(m_imageCapture, &QImageCapture::imageCaptured,
+                this, &MainWindow::onCameraCaptureDone);
+        connect(m_imageCapture,
+                &QImageCapture::errorOccurred,
+                this, &MainWindow::onCameraError);
+
+        m_camera->start();
+        statusLbl->setText("📹 Camera active — position invoice and click Capture");
+    };
+
+    // Start with first camera
+    setupCamera(0);
+
+    // Switch camera on combo change
+    connect(camCombo, &QComboBox::currentIndexChanged,
+            this, [&](int idx){ setupCamera(idx); });
+
+    // Capture button
+    connect(captureBtn, &QPushButton::clicked, this, [&, statusLbl]() {
+        if (!m_imageCapture) return;
+        if (!m_imageCapture->isReadyForCapture()) {
+            statusLbl->setText("⚠ Camera not ready yet, please wait...");
+            return;
+        }
+        statusLbl->setText("📸 Capturing...");
+        captureBtn->setEnabled(false);
+
+        // Save to temp file and also get QImage via signal
+        QString tempPath = QStandardPaths::writableLocation(
+                               QStandardPaths::TempLocation)
+                           + "/invoice_capture.jpg";
+        m_imageCapture->captureToFile(tempPath);
+        statusLbl->setText("✔ Captured! Processing OCR...");
+    });
+
+    // Cancel button
+    connect(cancelBtn, &QPushButton::clicked, this, [&]() {
+        if (m_camera) m_camera->stop();
+        m_cameraDialog->reject();
+    });
+
+    // Stop camera when dialog closes
+    connect(m_cameraDialog, &QDialog::finished, this, [&]() {
+        if (m_camera) {
+            m_camera->stop();
+        }
+    });
+
+    m_cameraDialog->exec();
 }
 
-// ── Slots ────────────────────────────────────────────────────────────────────
+// ── Camera Capture Done ──────────────────────────────────────────────────────
+void MainWindow::onCameraCaptureDone(int /*id*/, const QImage &image) {
+    if (m_camera) m_camera->stop();
+    if (m_cameraDialog) m_cameraDialog->accept();
 
+    m_logView->append("[" + QDateTime::currentDateTime().toString("hh:mm:ss")
+                      + "] Camera capture received");
+
+    // Show preview
+    QPixmap px = QPixmap::fromImage(image);
+    m_previewLabel->setPixmap(px.scaled(
+        m_previewLabel->size(),
+        Qt::KeepAspectRatio,
+        Qt::SmoothTransformation));
+
+    // Save captured image to temp for reference
+    QString tempPath = QStandardPaths::writableLocation(
+                           QStandardPaths::TempLocation)
+                       + "/invoice_capture.png";
+    image.save(tempPath);
+    m_logView->append("  → Saved capture to: " + tempPath);
+
+    // Process via OCR
+    processImage(image);
+}
+
+// ── Camera Error ─────────────────────────────────────────────────────────────
+void MainWindow::onCameraError(int /*id*/, QImageCapture::Error /*error*/,
+                               const QString &errorString) {
+    m_logView->append("  ✗ Camera error: " + errorString);
+    QMessageBox::warning(this, "Camera Error", errorString);
+}
+
+// ── Process Image from File ──────────────────────────────────────────────────
 void MainWindow::onScanImage() {
     QString path = QFileDialog::getOpenFileName(
         this, "Open Invoice Image", "",
-        "Images (*.png *.jpg *.jpeg *.bmp *.tiff *.tif *.webp)");
+        "Images (*.png *.jpg *.jpeg *.bmp *.tiff *.tif)");
     if (path.isEmpty()) return;
     processImage(path);
 }
 
-void MainWindow::onScanCamera() {
-    QMessageBox::information(this, "Camera",
-                             "Camera capture: use your OS camera app to take a photo,\n"
-                             "then use 'Scan Image' to load the saved file.\n\n"
-                             "(Integrate QCamera for live capture in production builds.)");
-}
-
 void MainWindow::processImage(const QString &path) {
-    // Show preview
     QPixmap px(path);
     if (!px.isNull()) {
         m_previewLabel->setPixmap(px.scaled(
-            m_previewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            m_previewLabel->size(),
+            Qt::KeepAspectRatio,
+            Qt::SmoothTransformation));
     }
-
     m_progress->setVisible(true);
-    m_logView->append("[" + QDateTime::currentDateTime().toString("hh:mm:ss") + "] Loading: " + path);
+    m_logView->append("[" + QDateTime::currentDateTime().toString("hh:mm:ss")
+                      + "] Scanning: " + path);
     QApplication::processEvents();
 
     if (!m_ocr.isReady()) {
-        QMessageBox::warning(this, "OCR", "OCR engine not ready. Check Tesseract installation.");
+        QMessageBox::warning(this, "OCR", "OCR engine not ready.");
         m_progress->setVisible(false);
         return;
     }
 
-    m_logView->append("  → Running OCR...");
-    QApplication::processEvents();
     QString rawText = m_ocr.extractText(path);
+    finishProcessing(rawText);
+}
 
+// ── Process QImage (from camera) ─────────────────────────────────────────────
+void MainWindow::processImage(const QImage &image) {
+    m_progress->setVisible(true);
+    m_logView->append("  → Running OCR on captured image...");
+    QApplication::processEvents();
+
+    if (!m_ocr.isReady()) {
+        QMessageBox::warning(this, "OCR", "OCR engine not ready.");
+        m_progress->setVisible(false);
+        return;
+    }
+
+    QString rawText = m_ocr.extractText(image);
+    finishProcessing(rawText);
+}
+
+// ── Shared OCR finish logic ──────────────────────────────────────────────────
+void MainWindow::finishProcessing(const QString &rawText) {
     if (rawText.trimmed().isEmpty()) {
-        m_logView->append("  ⚠ No text extracted.");
+        m_logView->append("  ⚠ No text extracted from image.");
         m_progress->setVisible(false);
         return;
     }
@@ -335,16 +495,17 @@ void MainWindow::processImage(const QString &path) {
     if (!m_db.saveInvoice(data)) {
         m_logView->append("  ✗ DB error: " + m_db.lastError());
     } else {
-        m_logView->append("  ✔ Saved — ID: " + QString::number(data.dbId)
-                          + "  Invoice#: " + data.invoiceNumber
-                          + "  Total: $" + QString::number(data.totalAmount,'f',2));
+        m_logView->append("  ✔ Saved — ID: "    + QString::number(data.dbId)
+                          + "  Invoice#: "       + data.invoiceNumber
+                          + "  Total: $"         + QString::number(data.totalAmount,'f',2));
         refreshTable();
     }
-
     m_progress->setVisible(false);
-    statusBar()->showMessage("Last scan: " + QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss"));
+    statusBar()->showMessage("Last scan: "
+                             + QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss"));
 }
 
+// ── Table / CRUD ─────────────────────────────────────────────────────────────
 void MainWindow::refreshTable() {
     m_currentList = m_db.loadAllInvoices();
     loadInvoiceToTable(m_currentList);
@@ -413,9 +574,8 @@ void MainWindow::onDeleteInvoice() {
 void MainWindow::onSearch() {
     QString kw = m_searchBox->text().trimmed();
     if (kw.isEmpty()) { refreshTable(); return; }
-    QList<InvoiceData> results = m_db.searchInvoices(kw);
-    loadInvoiceToTable(results);
-    statusBar()->showMessage("Found " + QString::number(results.size()) + " result(s)");
+    loadInvoiceToTable(m_db.searchInvoices(kw));
+    statusBar()->showMessage("Search results for: " + kw);
 }
 
 void MainWindow::onClearSearch() {
@@ -428,11 +588,12 @@ void MainWindow::onTableDoubleClick(int /*row*/, int /*col*/) {
 }
 
 void MainWindow::onExportCSV() {
-    QString path = QFileDialog::getSaveFileName(this,"Export CSV","invoices_export.csv","CSV (*.csv)");
+    QString path = QFileDialog::getSaveFileName(
+        this, "Export CSV", "invoices_export.csv", "CSV (*.csv)");
     if (path.isEmpty()) return;
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QMessageBox::critical(this,"Error","Cannot write file.");
+        QMessageBox::critical(this, "Error", "Cannot write file.");
         return;
     }
     QTextStream out(&f);
@@ -450,5 +611,51 @@ void MainWindow::onExportCSV() {
     }
     f.close();
     m_logView->append("✔ Exported to: " + path);
-    statusBar()->showMessage("CSV exported: " + path);
+}
+
+// ── Stylesheet ───────────────────────────────────────────────────────────────
+void MainWindow::applyStyleSheet() {
+    setStyleSheet(R"(
+        QMainWindow { background: #13131f; }
+        QWidget     { background: #1a1a2e; color: #e0e0e0;
+                      font-family: Segoe UI; font-size: 13px; }
+        QGroupBox   { border: 1px solid #3a3a5c; border-radius: 6px;
+                      margin-top: 8px; padding: 8px;
+                      font-weight: bold; color: #a0c4ff; }
+        QGroupBox::title { subcontrol-origin: margin; left: 10px; }
+        QTableWidget { background: #12122a; gridline-color: #2a2a4a;
+                       selection-background-color: #4a4aaa;
+                       border: none; border-radius: 4px; }
+        QHeaderView::section { background: #252550; color: #a0c4ff;
+                               padding: 6px; border: none; font-weight: bold; }
+        QTableWidget::item:alternate { background: #16163a; }
+        QLineEdit   { background: #252545; border: 1px solid #4a4a7a;
+                      border-radius: 4px; padding: 4px 8px; color: #e0e0e0; }
+        QLineEdit:focus { border-color: #7a7aff; }
+        QPushButton { background: #3a3a8a; color: #ffffff; border: none;
+                      border-radius: 5px; padding: 6px 14px; font-weight: bold; }
+        QPushButton:hover   { background: #5a5acc; }
+        QPushButton:pressed { background: #2a2a6a; }
+        QTextEdit   { background: #12122a; border: 1px solid #3a3a5c;
+                      border-radius: 4px; color: #c8c8d8; }
+        QComboBox   { background: #252545; border: 1px solid #4a4a7a;
+                      border-radius: 4px; padding: 4px 8px; color: #e0e0e0; }
+        QComboBox::drop-down { border: none; }
+        QComboBox QAbstractItemView { background: #1a1a3a; color: #e0e0e0;
+                                      selection-background-color: #3a3a8a; }
+        QProgressBar { border: none; border-radius: 4px;
+                       background: #252545; height: 8px; }
+        QProgressBar::chunk { background: #7a7aff; border-radius: 4px; }
+        QMenuBar { background: #111128; color: #e0e0e0; }
+        QMenuBar::item:selected { background: #3a3a8a; }
+        QMenu { background: #1a1a3a; color: #e0e0e0;
+                border: 1px solid #3a3a5c; }
+        QMenu::item:selected { background: #3a3a8a; }
+        QToolBar { background: #111128; border: none;
+                   spacing: 4px; padding: 2px; }
+        QScrollBar:vertical { background: #1a1a2e; width: 10px; }
+        QScrollBar::handle:vertical { background: #3a3a6a; border-radius: 5px; }
+        QStatusBar { background: #111128; color: #888; }
+        QDialog { background: #1a1a2e; }
+    )");
 }

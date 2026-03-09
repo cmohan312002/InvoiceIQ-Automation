@@ -28,4 +28,5 @@ private:
     QString extractEmail(const QString &text);
     QString extractPhone(const QString &text);
     QString extractAddress(const QString &text);
+    // QString fixOcrInvoice(QString code);
 };

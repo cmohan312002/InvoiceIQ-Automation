@@ -20,6 +20,149 @@ InvoiceViewDialog::InvoiceViewDialog(const InvoiceData &data, bool editable, QWi
 {
     setWindowTitle(editable ? "Edit Invoice" : "Invoice Details");
     setMinimumSize(850, 680);
+    setStyleSheet(R"(
+        QDialog, QWidget {
+            background: #1a1a2e;
+            color: #e0e0e0;
+            font-family: Segoe UI;
+            font-size: 13px;
+        }
+        QGroupBox {
+            border: 1px solid #3a3a5c;
+            border-radius: 6px;
+            margin-top: 8px;
+            padding: 8px;
+            font-weight: bold;
+            color: #a0c4ff;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+        }
+        QLineEdit {
+            background: #252545;
+            border: 1px solid #4a4a7a;
+            border-radius: 4px;
+            padding: 4px 8px;
+            color: #e0e0e0;
+        }
+        QLineEdit:focus {
+            border-color: #7a7aff;
+        }
+        QLineEdit:read-only {
+            background: #1e1e3a;
+            border-color: #2a2a4a;
+            color: #a0a0c0;
+        }
+        QDateEdit {
+            background: #252545;
+            border: 1px solid #4a4a7a;
+            border-radius: 4px;
+            padding: 4px 8px;
+            color: #e0e0e0;
+        }
+        QDateEdit:read-only {
+            background: #1e1e3a;
+            border-color: #2a2a4a;
+            color: #a0a0c0;
+        }
+        QDateEdit::drop-down {
+            border: none;
+            background: #3a3a8a;
+            border-radius: 3px;
+        }
+        QDoubleSpinBox {
+            background: #252545;
+            border: 1px solid #4a4a7a;
+            border-radius: 4px;
+            padding: 4px;
+            color: #e0e0e0;
+        }
+        QDoubleSpinBox:read-only {
+            background: #1e1e3a;
+            border-color: #2a2a4a;
+            color: #a0a0c0;
+        }
+        QTextEdit {
+            background: #12122a;
+            border: 1px solid #3a3a5c;
+            border-radius: 4px;
+            color: #c8c8d8;
+        }
+        QTableWidget {
+            background: #12122a;
+            gridline-color: #2a2a4a;
+            selection-background-color: #4a4aaa;
+            border: none;
+            border-radius: 4px;
+        }
+        QHeaderView::section {
+            background: #252550;
+            color: #a0c4ff;
+            padding: 6px;
+            border: none;
+            font-weight: bold;
+        }
+        QTableWidget::item:alternate {
+            background: #16163a;
+        }
+        QPushButton {
+            background: #3a3a8a;
+            color: #ffffff;
+            border: none;
+            border-radius: 5px;
+            padding: 6px 14px;
+            font-weight: bold;
+        }
+        QPushButton:hover   { background: #5a5acc; }
+        QPushButton:pressed { background: #2a2a6a; }
+        QTabWidget::pane {
+            border: 1px solid #3a3a5c;
+            border-radius: 4px;
+        }
+        QTabBar::tab {
+            background: #252545;
+            color: #a0a0c0;
+            padding: 7px 16px;
+            border-radius: 4px 4px 0 0;
+            margin-right: 2px;
+        }
+        QTabBar::tab:selected {
+            background: #3a3a8a;
+            color: #ffffff;
+        }
+        QScrollBar:vertical {
+            background: #1a1a2e;
+            width: 10px;
+        }
+        QScrollBar::handle:vertical {
+            background: #3a3a6a;
+            border-radius: 5px;
+        }
+        QLabel {
+            color: #e0e0e0;
+        }
+        QDialogButtonBox QPushButton {
+            background: #3a3a8a;
+            color: #ffffff;
+            border: none;
+            border-radius: 5px;
+            padding: 6px 20px;
+            font-weight: bold;
+            min-width: 80px;
+        }
+        QDialogButtonBox QPushButton:hover { background: #5a5acc; }
+        QCalendarWidget {
+            background: #1a1a2e;
+            color: #e0e0e0;
+        }
+        QCalendarWidget QAbstractItemView {
+            background: #1a1a2e;
+            color: #e0e0e0;
+            selection-background-color: #3a3a8a;
+        }
+    )");
+
     buildUI();
     populateFields();
 }
