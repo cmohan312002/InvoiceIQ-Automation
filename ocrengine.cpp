@@ -1,7 +1,7 @@
 #include "ocrengine.h"
 #include <QDebug>
 #include <QFileInfo>
-
+#include <QCoreApplication>
 OcrEngine::OcrEngine() {}
 
 OcrEngine::~OcrEngine() {
@@ -12,36 +12,56 @@ OcrEngine::~OcrEngine() {
     }
 }
 
-bool OcrEngine::initialize(const QString &tessDataPath) {
+// bool OcrEngine::initialize(const QString &tessDataPath) {
+//     m_api = new tesseract::TessBaseAPI();
+
+//     // Try caller-supplied path first, then vcpkg share, then env var
+//     QStringList candidates;
+//     if (!tessDataPath.isEmpty())
+//         candidates << tessDataPath;
+
+//     // vcpkg installs tessdata here:
+//     candidates << "D:/Workspace/Mohan/vcpkg/installed/x64-mingw-dynamic/share/tessdata";
+//     candidates << "D:/Workspace/Mohan/vcpkg/installed/x64-mingw-dynamic/share/tesseract";
+
+//     // Also respect TESSDATA_PREFIX env var if set
+//     QString envPath = qEnvironmentVariable("TESSDATA_PREFIX");
+//     if (!envPath.isEmpty()) candidates.prepend(envPath);
+
+//     for (const QString &path : candidates) {
+//         QFileInfo fi(path);
+//         if (!fi.exists()) continue;
+
+//         if (m_api->Init(path.toUtf8().constData(), "eng") == 0) {
+//             m_api->SetPageSegMode(tesseract::PSM_AUTO);
+//             m_ready = true;
+//             qDebug() << "[OCR] Initialized with tessdata:" << path;
+//             return true;
+//         }
+//     }
+
+//     m_lastError = "Tesseract init failed. No valid tessdata found in:\n"
+//                   + candidates.join("\n");
+//     m_ready = false;
+//     return false;
+// }
+
+bool OcrEngine::initialize(const QString &tessDataPath)
+{
     m_api = new tesseract::TessBaseAPI();
 
-    // Try caller-supplied path first, then vcpkg share, then env var
-    QStringList candidates;
-    if (!tessDataPath.isEmpty())
-        candidates << tessDataPath;
+    // 🔥 THIS IS THE FIX
+    QString appPath = QCoreApplication::applicationDirPath() + "/tessdata";
 
-    // vcpkg installs tessdata here:
-    candidates << "D:/Workspace/Mohan/vcpkg/installed/x64-mingw-dynamic/share/tessdata";
-    candidates << "D:/Workspace/Mohan/vcpkg/installed/x64-mingw-dynamic/share/tesseract";
-
-    // Also respect TESSDATA_PREFIX env var if set
-    QString envPath = qEnvironmentVariable("TESSDATA_PREFIX");
-    if (!envPath.isEmpty()) candidates.prepend(envPath);
-
-    for (const QString &path : candidates) {
-        QFileInfo fi(path);
-        if (!fi.exists()) continue;
-
-        if (m_api->Init(path.toUtf8().constData(), "eng") == 0) {
-            m_api->SetPageSegMode(tesseract::PSM_AUTO);
-            m_ready = true;
-            qDebug() << "[OCR] Initialized with tessdata:" << path;
-            return true;
-        }
+    if (m_api->Init(appPath.toUtf8().constData(), "eng") == 0)
+    {
+        m_api->SetPageSegMode(tesseract::PSM_AUTO);
+        m_ready = true;
+        qDebug() << "✅ OCR working from:" << appPath;
+        return true;
     }
 
-    m_lastError = "Tesseract init failed. No valid tessdata found in:\n"
-                  + candidates.join("\n");
+    m_lastError = "Tesseract init failed";
     m_ready = false;
     return false;
 }
